@@ -127,3 +127,53 @@ describe.each(['native', 'another realm', 'compatible implementation'])(
     })
   },
 )
+
+describe('persist synchronous migration with Promise-named actions', () => {
+  it.each(['then', 'then and catch', 'then, catch and finally'])(
+    'preserves a synchronous state with %s actions without calling them',
+    (methods) => {
+      const thenAction = vi.fn()
+      const catchAction = vi.fn()
+      const finallyAction = vi.fn()
+      const actions = {
+        then: thenAction,
+        ...(methods.includes('catch') ? { catch: catchAction } : {}),
+        ...(methods.includes('finally') ? { finally: finallyAction } : {}),
+      }
+      let stored = JSON.stringify({
+        state: { drafts: ['saved draft'] },
+        version: 1,
+      })
+      const migrated = { drafts: ['migrated draft'], ...actions }
+      const completed = vi.fn()
+      const store = createStore(
+        persist(() => ({ drafts: [] as string[], ...actions }), {
+          name: 'drafts',
+          version: 2,
+          storage: createJSONStorage<State>(() => ({
+            getItem: () => stored,
+            setItem: (_, value) => {
+              stored = value
+            },
+            removeItem: () => {},
+          })),
+          partialize: ({ drafts }) => ({ drafts }),
+          migrate: () => migrated,
+          onRehydrateStorage: () => completed,
+        }),
+      )
+
+      // Synchronous migrations must be available as soon as createStore returns.
+      expect(store.persist.hasHydrated()).toBe(true)
+      expect(store.getState()).toEqual(migrated)
+      expect(JSON.parse(stored)).toEqual({
+        state: { drafts: migrated.drafts },
+        version: 2,
+      })
+      expect(completed).toHaveBeenCalledExactlyOnceWith(migrated, undefined)
+      expect(thenAction).not.toHaveBeenCalled()
+      expect(catchAction).not.toHaveBeenCalled()
+      expect(finallyAction).not.toHaveBeenCalled()
+    },
+  )
+})
