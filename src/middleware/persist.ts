@@ -279,8 +279,12 @@ const persistImpl: PersistImpl = (config, baseOptions) => (set, get, api) => {
                 deserializedStorageValue.state,
                 deserializedStorageValue.version,
               )
-              if (migration instanceof Promise) {
-                return migration.then((result) => [true, result] as const)
+              if (
+                typeof (migration as Promise<S> | null)?.then === 'function'
+              ) {
+                return Promise.resolve(migration).then(
+                  (result) => [true, result] as const,
+                )
               }
               return [true, migration] as const
             }
