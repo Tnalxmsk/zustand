@@ -154,18 +154,8 @@ type Thenable<Value> = {
   ): Thenable<V>
 }
 
-const isPromise = (value: unknown): value is Promise<unknown> => {
-  const candidate = value as Partial<Promise<unknown>> | null | undefined
-  // A synchronous migration state can contain actions named then or catch.
-  // Check the Promise interface rather than treating every then action as async.
-  return (
-    value instanceof Promise ||
-    (typeof candidate?.then === 'function' &&
-      typeof candidate.catch === 'function' &&
-      typeof candidate.finally === 'function' &&
-      typeof candidate[Symbol.toStringTag] === 'string')
-  )
-}
+const isPromiseLike = (value: unknown): value is PromiseLike<unknown> =>
+  typeof (value as PromiseLike<unknown>)?.then === 'function'
 
 const toThenable =
   <Result, Input>(
@@ -292,7 +282,7 @@ const persistImpl: PersistImpl = (config, baseOptions) => (set, get, api) => {
                 deserializedStorageValue.state,
                 deserializedStorageValue.version,
               )
-              if (isPromise(migration)) {
+              if (isPromiseLike(migration)) {
                 return Promise.resolve(migration).then(
                   (result) => [true, result] as const,
                 )
