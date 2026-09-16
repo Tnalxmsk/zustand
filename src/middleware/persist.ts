@@ -48,8 +48,8 @@ export function createJSONStorage<S, R = unknown>(
         return JSON.parse(str, options?.reviver) as StorageValue<S>
       }
       const str = storage.getItem(name) ?? null
-      if (str instanceof Promise) {
-        return str.then(parse)
+      if (isPromiseLike(str)) {
+        return Promise.resolve(str).then(parse)
       }
       return parse(str)
     },
@@ -147,10 +147,10 @@ type StorePersist<S, Ps, Pr> = S extends {
 
 type Thenable<Value> = {
   then<V>(
-    onFulfilled: (value: Value) => V | Promise<V> | Thenable<V>,
+    onFulfilled: (value: Value) => V | PromiseLike<V> | Thenable<V>,
   ): Thenable<V>
   catch<V>(
-    onRejected: (reason: Error) => V | Promise<V> | Thenable<V>,
+    onRejected: (reason: Error) => V | PromiseLike<V> | Thenable<V>,
   ): Thenable<V>
 }
 
@@ -159,13 +159,13 @@ const isPromiseLike = (value: unknown): value is PromiseLike<unknown> =>
 
 const toThenable =
   <Result, Input>(
-    fn: (input: Input) => Result | Promise<Result> | Thenable<Result>,
+    fn: (input: Input) => Result | PromiseLike<Result> | Thenable<Result>,
   ) =>
   (input: Input): Thenable<Result> => {
     try {
       const result = fn(input)
-      if (result instanceof Promise) {
-        return result as Thenable<Result>
+      if (isPromiseLike(result)) {
+        return Promise.resolve(result) as Thenable<Result>
       }
       return {
         then(onFulfilled) {
@@ -283,9 +283,7 @@ const persistImpl: PersistImpl = (config, baseOptions) => (set, get, api) => {
                 deserializedStorageValue.version,
               )
               if (isPromiseLike(migration)) {
-                return Promise.resolve(migration).then(
-                  (result) => [true, result] as const,
-                )
+                return migration.then((result) => [true, result] as const)
               }
               return [true, migration] as const
             }

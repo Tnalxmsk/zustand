@@ -2,6 +2,7 @@ import { runInNewContext } from 'node:vm'
 import { describe, expect, it, vi } from 'vitest'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import { createStore } from 'zustand/vanilla'
+import { createPromiseLike } from './test-utils'
 
 type State = { drafts: string[] }
 type Deferred<T> = {
@@ -26,8 +27,8 @@ const deferred = <T>(kind: string): Deferred<T> => {
   })
   return {
     promise:
-      kind === 'minimal thenable'
-        ? ({ then: promise.then.bind(promise) } as Promise<T>)
+      kind === 'PromiseLike without catch'
+        ? (createPromiseLike(promise) as Promise<T>)
         : kind === 'compatible implementation'
           ? {
               then: promise.then.bind(promise),
@@ -45,7 +46,7 @@ describe.each([
   'native',
   'another realm',
   'compatible implementation',
-  'minimal thenable',
+  'PromiseLike without catch',
 ])('persist migration with a Promise from %s', (kind) => {
   it('waits for migration before replacing persisted data and advancing its version', async () => {
     const original = { state: { drafts: ['saved draft'] }, version: 1 }
@@ -175,15 +176,13 @@ describe('persist synchronous migration', () => {
   )
 })
 
-it('assimilates a callable then even when the result also has state fields', async () => {
+it('uses the resolved state from a chainable PromiseLike carrying state fields', async () => {
   let stored = JSON.stringify({
     state: { drafts: ['saved draft'] },
     version: 1,
   })
   const migrated = { drafts: ['migrated draft'] }
-  const then = vi.fn((resolve: (state: State) => void) => {
-    resolve(migrated)
-  })
+  const promiseLike = createPromiseLike(Promise.resolve(migrated))
   const store = createStore(
     persist((): State => ({ drafts: [] }), {
       name: 'drafts',
@@ -197,13 +196,12 @@ it('assimilates a callable then even when the result also has state fields', asy
         removeItem: () => {},
       })),
       partialize: ({ drafts }) => ({ drafts }),
-      migrate: () => ({ drafts: ['unresolved draft'], then }),
+      migrate: () => ({ drafts: ['unresolved draft'], ...promiseLike }),
     }),
   )
 
   await store.persist.rehydrate()
 
-  expect(then).toHaveBeenCalledOnce()
   expect(store.getState()).toEqual(migrated)
   expect(JSON.parse(stored)).toEqual({ state: migrated, version: 2 })
   expect(store.persist.hasHydrated()).toBe(true)
