@@ -134,10 +134,16 @@ describe.each(['native', 'another realm', 'PromiseLike without catch'])(
 )
 
 it.each(['another realm', 'PromiseLike without catch'])(
-  'waits for a %s storage write before completing migration hydration',
+  'ignores a stale %s migration after a newer hydration completes',
   async (kind) => {
-    const write = deferred<void>(kind)
+    const older = deferred<State>(kind)
+    const newer = deferred<State>(kind)
     const completed = vi.fn()
+    const setItem = vi.fn()
+    const migrate = vi
+      .fn()
+      .mockReturnValueOnce(older.promise)
+      .mockReturnValueOnce(newer.promise)
     const store = createStore(
       persist((): State => ({ drafts: [] }), {
         name: 'drafts',
@@ -145,23 +151,82 @@ it.each(['another realm', 'PromiseLike without catch'])(
         skipHydration: true,
         storage: {
           getItem: () => ({ state: { drafts: ['saved draft'] }, version: 0 }),
-          setItem: () => write.promise,
+          setItem,
           removeItem: () => {},
         },
-        migrate: (state) => state as State,
+        migrate,
         onRehydrateStorage: () => completed,
       }),
     )
+    const first = store.persist.rehydrate()
+    const second = store.persist.rehydrate()
+    const latest = { drafts: ['latest draft'] }
+    newer.resolve(latest)
+    await second
+    older.resolve({ drafts: ['stale draft'] })
+    await first
+
+    expect(store.getState()).toEqual(latest)
+    expect(store.persist.hasHydrated()).toBe(true)
+    expect(setItem).toHaveBeenCalledExactlyOnceWith('drafts', {
+      state: latest,
+      version: 1,
+    })
+    expect(completed).toHaveBeenCalledExactlyOnceWith(latest, undefined)
+  },
+)
+
+it.each(['another realm', 'PromiseLike without catch'])(
+  'does not restore a pending %s read after storage is cleared',
+  async (kind) => {
+    const { read, store, setItem, completed } = setup(kind, true)
     const hydration = store.persist.rehydrate()
-    expect(store.persist.hasHydrated()).toBe(false)
-    expect(completed).not.toHaveBeenCalled()
-    write.resolve()
+    store.persist.clearStorage()
+    read.resolve(
+      JSON.stringify({ state: { drafts: ['old draft'] }, version: 0 }),
+    )
     await hydration
 
+    expect(store.getState()).toEqual({ drafts: [] })
+    expect(store.persist.hasHydrated()).toBe(false)
+    expect(completed).not.toHaveBeenCalled()
+    expect(setItem).not.toHaveBeenCalled()
+  },
+)
+
+it.each(['native', 'another realm'])(
+  'preserves standalone JSON storage rejection handling for a %s Promise',
+  async (kind) => {
+    const read = deferred<string | null>(kind)
+    const storage = createJSONStorage<State>(() => ({
+      getItem: () => read.promise,
+      setItem: () => {},
+      removeItem: () => {},
+    }))!
+    const result = storage.getItem(
+      'drafts',
+    ) as Promise<StorageValue<State> | null>
+    const rejected = vi.fn()
+    const handled = result.catch(rejected)
+    read.resolve('{')
+    await handled
+    expect(rejected).toHaveBeenCalledExactlyOnceWith(expect.any(SyntaxError))
+  },
+)
+
+it.each(['native', 'another realm', 'PromiseLike without catch'])(
+  'returns a Promise supporting finally for an asynchronous %s hydration',
+  async (kind) => {
+    const { read, store } = setup(kind, false)
+    const finished = vi.fn()
+    const hydration = store.persist.rehydrate()
+    if (!hydration) throw new Error('Expected asynchronous hydration')
+    const completion = hydration.finally(finished)
+    read.resolve({ state: { drafts: ['saved draft'] }, version: 0 })
+    await completion
+
+    expect(finished).toHaveBeenCalledOnce()
+    expect(store.getState()).toEqual({ drafts: ['saved draft'] })
     expect(store.persist.hasHydrated()).toBe(true)
-    expect(completed).toHaveBeenCalledExactlyOnceWith(
-      { drafts: ['saved draft'] },
-      undefined,
-    )
   },
 )

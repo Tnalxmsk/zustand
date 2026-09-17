@@ -49,7 +49,7 @@ export function createJSONStorage<S, R = unknown>(
       }
       const str = storage.getItem(name) ?? null
       if (isPromiseLike(str)) {
-        return Promise.resolve(str).then(parse)
+        return str.then(parse)
       }
       return parse(str)
     },
@@ -147,25 +147,34 @@ type StorePersist<S, Ps, Pr> = S extends {
 
 type Thenable<Value> = {
   then<V>(
-    onFulfilled: (value: Value) => V | PromiseLike<V> | Thenable<V>,
+    onFulfilled: (value: Value) => V | Promise<V> | Thenable<V>,
   ): Thenable<V>
   catch<V>(
-    onRejected: (reason: Error) => V | PromiseLike<V> | Thenable<V>,
+    onRejected: (reason: Error) => V | Promise<V> | Thenable<V>,
   ): Thenable<V>
 }
 
 const isPromiseLike = (value: unknown): value is PromiseLike<unknown> =>
   typeof (value as PromiseLike<unknown>)?.then === 'function'
 
+const toPromise = <Value>(value: PromiseLike<Value>): Promise<Value> => {
+  if (value instanceof Promise) {
+    return value
+  }
+  return new Promise<Value>((resolve, reject) => {
+    value.then(resolve, reject)
+  })
+}
+
 const toThenable =
   <Result, Input>(
-    fn: (input: Input) => Result | PromiseLike<Result> | Thenable<Result>,
+    fn: (input: Input) => Result | Promise<Result> | Thenable<Result>,
   ) =>
   (input: Input): Thenable<Result> => {
     try {
       const result = fn(input)
-      if (isPromiseLike(result)) {
-        return Promise.resolve(result) as Thenable<Result>
+      if (result instanceof Promise) {
+        return result as Thenable<Result>
       }
       return {
         then(onFulfilled) {
@@ -270,7 +279,11 @@ const persistImpl: PersistImpl = (config, baseOptions) => (set, get, api) => {
       options.onRehydrateStorage?.(get() ?? configResult) || undefined
 
     // bind is used to avoid `TypeError: Illegal invocation` error
-    return toThenable(storage.getItem.bind(storage))(options.name)
+    const getItem = storage.getItem.bind(storage)
+    return toThenable((name: string) => {
+      const result = getItem(name)
+      return isPromiseLike(result) ? toPromise(result) : result
+    })(options.name)
       .then((deserializedStorageValue) => {
         if (deserializedStorageValue) {
           if (
@@ -283,7 +296,9 @@ const persistImpl: PersistImpl = (config, baseOptions) => (set, get, api) => {
                 deserializedStorageValue.version,
               )
               if (isPromiseLike(migration)) {
-                return migration.then((result) => [true, result] as const)
+                return toPromise(migration).then(
+                  (result) => [true, result] as const,
+                )
               }
               return [true, migration] as const
             }
